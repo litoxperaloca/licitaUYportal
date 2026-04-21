@@ -1,0 +1,10 @@
+env
+.env
+.env_local
+node_modules
+nextjs
+/node_modules/**
+/nextjs/**
+.env.example
+.key
+*.db

@@ -1,0 +1,4 @@
+portal.licita.uy {
+    encode gzip zstd
+    reverse_proxy frontend:80
+}

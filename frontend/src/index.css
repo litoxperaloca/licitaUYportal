@@ -1,0 +1,240 @@
+/* ── Google Fonts ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design Tokens ────────────────────────────────────────────────────────── */
+@layer base {
+
+  /* ── LIGHT THEME ── */
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 224 71% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 71% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 71% 4%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 94%;
+    --secondary-foreground: 221 83% 40%;
+    --muted: 210 40% 94%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 92%;
+    --accent-foreground: 224 71% 20%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 32% 88%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.875rem;
+
+    /* Graph node palette */
+    --color-root:      #f59e0b;
+    --color-organismo: #6366f1;
+    --color-llamado:   #22c55e;
+    --color-item:      #f97316;
+    --color-supplier:  #ec4899;
+
+    /* Glass */
+    --glass-bg: rgba(255,255,255,0.72);
+    --glass-border: rgba(0,0,0,0.08);
+    --glass-blur: 20px;
+  }
+
+  /* ── DARK THEME ── */
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 96%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 7%;
+    --secondary: 217 33% 18%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 18%;
+    --muted-foreground: 215 20% 60%;
+    --accent: 217 33% 22%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 96%;
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 224 76% 48%;
+
+    --glass-bg: rgba(20, 27, 45, 0.75);
+    --glass-border: rgba(255,255,255,0.07);
+    --glass-blur: 20px;
+  }
+
+  /* ── MIDNIGHT THEME ── */
+  .theme-midnight {
+    --background: 232 50% 5%;
+    --foreground: 210 40% 97%;
+    --card: 232 50% 8%;
+    --card-foreground: 210 40% 97%;
+    --popover: 232 50% 9%;
+    --popover-foreground: 210 40% 97%;
+    --primary: 45 95% 52%;   /* Gold */
+    --primary-foreground: 232 50% 5%;
+    --secondary: 232 40% 16%;
+    --secondary-foreground: 210 40% 97%;
+    --muted: 232 40% 16%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 232 40% 20%;
+    --accent-foreground: 210 40% 97%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 97%;
+    --border: 232 40% 18%;
+    --input: 232 40% 18%;
+    --ring: 45 95% 52%;
+
+    --glass-bg: rgba(8, 10, 22, 0.80);
+    --glass-border: rgba(255, 215, 0, 0.08);
+    --glass-blur: 24px;
+  }
+
+  /* ── OCEAN THEME ── */
+  .theme-ocean {
+    --background: 200 70% 6%;
+    --foreground: 196 100% 97%;
+    --card: 200 70% 9%;
+    --card-foreground: 196 100% 97%;
+    --popover: 200 70% 10%;
+    --popover-foreground: 196 100% 97%;
+    --primary: 187 100% 42%;  /* Cyan */
+    --primary-foreground: 200 70% 5%;
+    --secondary: 200 60% 15%;
+    --secondary-foreground: 196 100% 97%;
+    --muted: 200 60% 15%;
+    --muted-foreground: 196 40% 65%;
+    --accent: 200 60% 19%;
+    --accent-foreground: 196 100% 97%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 196 100% 97%;
+    --border: 200 60% 17%;
+    --input: 200 60% 17%;
+    --ring: 187 100% 42%;
+
+    --glass-bg: rgba(5, 16, 24, 0.80);
+    --glass-border: rgba(0, 212, 255, 0.08);
+    --glass-blur: 24px;
+  }
+}
+
+/* ── Global Resets ────────────────────────────────────────────────────────── */
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1, "cv02" 1, "cv03" 1, "cv04" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .font-mono, code, kbd, pre, [class*="font-mono"] {
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace !important;
+  }
+}
+
+/* ── Glassmorphism System ─────────────────────────────────────────────────── */
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-right: 1px solid var(--glass-border);
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.25); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.4); }
+
+/* ── OCDS Node Badges ─────────────────────────────────────────────────────── */
+.badge-root      { background: var(--color-root);      color: #000; }
+.badge-organismo { background: var(--color-organismo); color: #fff; }
+.badge-llamado   { background: var(--color-llamado);   color: #000; }
+.badge-item      { background: var(--color-item);      color: #fff; }
+.badge-supplier  { background: var(--color-supplier);  color: #fff; }
+
+/* ── Sigma canvas ─────────────────────────────────────────────────────────── */
+#sigma-container { @apply absolute inset-0 w-full h-full; }
+
+/* ── Animations ───────────────────────────────────────────────────────────── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+@keyframes fade-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0); }
+  50%       { box-shadow: 0 0 20px 4px hsl(var(--primary) / 0.25); }
+}
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-right  { animation: slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-slide-left   { animation: slide-in-left  0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-fade-up      { animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-glow-pulse   { animation: glow-pulse 2s ease-in-out infinite; }
+.animate-count-up     { animation: count-up 0.35s ease both; }
+
+/* Shimmer skeleton loader */
+.shimmer {
+  background: linear-gradient(90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--accent)) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ── Utility: interactive glass button ───────────────────────────────────── */
+.btn-glass {
+  @apply px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200;
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+}
+.btn-glass:hover {
+  background: hsl(var(--accent));
+  border-color: hsl(var(--primary) / 0.3);
+}
+
+/* ── Focus ring ───────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ── Page transition ──────────────────────────────────────────────────────── */
+.page-enter { animation: fade-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }

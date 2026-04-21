@@ -1,0 +1,10 @@
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (7, date '2013-08-26', 11.1);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (2, date '2004-03-05', 14);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (3, date '2004-03-05', 0);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (4, date '2004-03-05', 3);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (5, date '2004-03-05', 5);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (1, date '2004-03-05', 23);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (2, date '2007-07-03', 10);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (1, date '2007-07-03', 22);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (8, date '2026-03-26', 11.5);
+insert into porcs_impuestos(imp_cod, fecha_vigencia, porcentaje) values (6, date '2007-07-03', 12.2);
