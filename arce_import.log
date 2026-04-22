@@ -1,0 +1,35 @@
+ARCE importado:
+  arce_det_variantes             273,500
+  arce_med_variantes             215,806
+  arce_art_impuestos             193,002
+  arce_art_unidades_med          100,540
+  arce_art_serv_obra              91,224
+  arce_medidas                    49,781
+  arce_art_colores                41,271
+  arce_art_atributos              20,118
+  arce_sinonimos                   4,088
+  arce_prop_unidades_med           3,201
+  arce_propiedades                 2,620
+  arce_subclases                   1,759
+  arce_marcas                      1,677
+  arce_unidades_med                  722
+  arce_presentaciones                580
+  arce_colores                       430
+  arce_clases                        349
+  arce_odgs                          313
+  arce_subflias                       53
+  arce_porcs_impuestos                10
+  arce_familias                        9
+  arce_impuestos                       8
+  arce_catalogo                       91,224
+  arce_catalogo_sinonimos              4,088
+
+Matching generado:
+  items totales                      408,010
+  items x_catalogo_arce             211,593
+  items macheados                    64,755
+  direct_code                      48,301
+  exact_description_unit           12,500
+  exact_description                 3,583
+  synonym_unit                        214
+  synonym                             157

@@ -14,6 +14,9 @@ services:
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
       AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT}
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION}
+      DB_BACKEND: ${DB_BACKEND:-sqlite}
+      USE_LEGACY_SQLITE: ${USE_LEGACY_SQLITE:-true}
+      DATABASE_URL: ${DATABASE_URL:-}
     restart: unless-stopped
 
   frontend:
@@ -22,6 +25,18 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - backend
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ocds
+      POSTGRES_USER: ocds
+      POSTGRES_PASSWORD: ocds
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
   caddy:
@@ -40,3 +55,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  pgdata:

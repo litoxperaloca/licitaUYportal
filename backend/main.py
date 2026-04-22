@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from database import init_db
+from database import init_db, get_backend_mode
 import auth
 from routers import process, graph, nodes, ai
 
@@ -44,4 +44,4 @@ if dist.exists():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "OCDS Uruguay Dashboard"}
+    return {"status": "ok", "service": "OCDS Uruguay Dashboard", "db_backend": get_backend_mode()}
