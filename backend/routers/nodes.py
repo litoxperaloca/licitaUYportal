@@ -11,7 +11,7 @@ from math import ceil
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 
-from database import get_conn, sql_limit_offset, sql_param
+from database import get_conn
 from routers.ai import client as ai_client, DEPLOYMENT_NAME
 
 router = APIRouter(tags=["nodes"])
@@ -85,7 +85,7 @@ def _normalize_smart_keywords(raw: str | None):
 def _append_text_filter(base: str, params: list, expr: str, value: str | None):
     if not value or not value.strip():
         return base, params
-    base += f" AND LOWER(COALESCE({expr}, '')) LIKE {sql_param()}"
+    base += f" AND LOWER(COALESCE({expr}, '')) LIKE ?"
     params.append(f"%{value.strip().lower()}%")
     return base, params
 
@@ -97,7 +97,7 @@ def _append_numeric_filter(base: str, params: list, expr: str, value: str | None
     if match:
         op = match.group(1) or "="
         number = float(match.group(2).replace(",", "."))
-        base += f" AND {expr} {op} {sql_param()}"
+        base += f" AND {expr} {op} ?"
         params.append(number)
     return base, params
 
@@ -108,10 +108,10 @@ def _append_date_filter(base: str, params: list, expr: str, value: str | None):
     match = DATE_FILTER_RE.match(value)
     if match:
         op = match.group(1) or "="
-        base += f" AND substr(COALESCE({expr}, ''), 1, 10) {op} {sql_param()}"
+        base += f" AND substr(COALESCE({expr}, ''), 1, 10) {op} ?"
         params.append(match.group(2))
     else:
-        base += f" AND substr(COALESCE({expr}, ''), 1, 10) LIKE {sql_param()}"
+        base += f" AND substr(COALESCE({expr}, ''), 1, 10) LIKE ?"
         params.append(f"%{value.strip()}%")
     return base, params
 
@@ -124,9 +124,9 @@ def _build_keyword_clause(alias: str, keywords: list[str]):
     params = []
     for keyword in keywords:
         clauses.append(
-            f"(LOWER(COALESCE({alias}.description, '')) LIKE {sql_param()} "
-            f"OR LOWER(COALESCE({alias}.cat_id, '')) LIKE {sql_param()} "
-            f"OR LOWER(COALESCE({alias}.id, '')) LIKE {sql_param()})"
+            f"(LOWER(COALESCE({alias}.description, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.cat_id, '')) LIKE ? "
+            f"OR LOWER(COALESCE({alias}.id, '')) LIKE ?)"
         )
         token = f"%{keyword}%"
         params.extend([token, token, token])
@@ -338,29 +338,27 @@ def search(q: str = Query(..., min_length=2), limit: int = Query(20, le=50)):
         return {"results": []}
     conn = get_conn()
     fts_q = _sanitize_fts_query(q)
-    ph = sql_param()
-    limit_clause, limit_params = sql_limit_offset(limit=limit)
 
     try:
         items = conn.execute(f"""
             SELECT item_id AS id, description AS label, 'item' AS type
-            FROM fts_items WHERE fts_items MATCH {ph}{limit_clause}
-        """, (fts_q, *limit_params)).fetchall()
+            FROM fts_items WHERE fts_items MATCH ? LIMIT {limit}
+        """, (fts_q,)).fetchall()
 
         suppliers = conn.execute(f"""
             SELECT supplier_id AS id, name AS label, 'supplier' AS type
-            FROM fts_suppliers WHERE fts_suppliers MATCH {ph}{limit_clause}
-        """, (fts_q, *limit_params)).fetchall()
+            FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT {limit}
+        """, (fts_q,)).fetchall()
 
         organismos = conn.execute(f"""
             SELECT org_id AS id, name AS label, 'organismo' AS type
-            FROM fts_organismos WHERE fts_organismos MATCH {ph}{limit_clause}
-        """, (fts_q, *limit_params)).fetchall()
+            FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT ?
+        """, (fts_q, limit)).fetchall()
 
         llamados = conn.execute(f"""
             SELECT ocid AS id, title AS label, 'llamado' AS type
-            FROM fts_llamados WHERE fts_llamados MATCH {ph}{limit_clause}
-        """, (fts_q, *limit_params)).fetchall()
+            FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT ?
+        """, (fts_q, limit)).fetchall()
     except Exception as e:
         # Probable error de corrupción o sintaxis en FTS
         conn.close()
@@ -394,13 +392,12 @@ def list_llamados(
     year_int = int(year) if year and year.strip().isdigit() else None
     year = year_int
     conn = get_conn()
-    ph = sql_param()
 
     if q and len(q.strip()) >= 2:
         fts_q = _sanitize_fts_query(q)
         try:
             ocids = conn.execute(f"""
-                SELECT ocid FROM fts_llamados WHERE fts_llamados MATCH {ph} LIMIT 2000
+                SELECT ocid FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT 2000
             """, (fts_q,)).fetchall()
         except Exception as e:
             conn.close()
@@ -410,27 +407,26 @@ def list_llamados(
         if not ocid_list:
             conn.close()
             return {"items": [], "total": 0}
-        in_ph = ",".join([ph] * len(ocid_list))
-        base = f"FROM llamados l JOIN organismos o ON o.id=l.buyer_id WHERE l.ocid IN ({in_ph})"
+        ph = ",".join("?" * len(ocid_list))
+        base = f"FROM llamados l JOIN organismos o ON o.id=l.buyer_id WHERE l.ocid IN ({ph})"
         params = list(ocid_list)
     else:
         base = "FROM llamados l LEFT JOIN organismos o ON o.id=l.buyer_id WHERE 1=1"
         params = []
         if org_id:
-            base += f" AND l.buyer_id={ph}"; params.append(org_id)
+            base += " AND l.buyer_id=?"; params.append(org_id)
         if year:
-            base += f" AND l.year={ph}"; params.append(year)
+            base += " AND l.year=?"; params.append(year)
         if method:
-            base += f" AND l.method={ph}"; params.append(method)
+            base += " AND l.method=?"; params.append(method)
         if status:
-            base += f" AND l.status={ph}"; params.append(status)
+            base += " AND l.status=?"; params.append(status)
 
-    page_clause, page_params = sql_limit_offset(limit=limit, offset=offset)
     total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
     rows = conn.execute(
         f"SELECT l.ocid, l.title, l.method, l.date, l.year, l.status, o.name AS org_name {base}"
-        f" ORDER BY l.date DESC{page_clause}",
-        params + page_params,
+        f" ORDER BY l.date DESC LIMIT ? OFFSET ?",
+        params + [limit, offset],
     ).fetchall()
     conn.close()
     return {"items": [dict(r) for r in rows], "total": total}
@@ -512,20 +508,19 @@ def history_table(
     sort_expr = HISTORY_SORT_FIELDS.get(sort_by, HISTORY_SORT_FIELDS["date"])
     sort_direction = "ASC" if str(sort_dir).lower() == "asc" else "DESC"
     offset = (page - 1) * limit
-    ph = sql_param()
 
     # Text search path
     if q and len(q.strip()) >= 2:
         fts_q = _sanitize_fts_query(q)
         try:
             item_ids = [r[0] for r in conn.execute(
-                f"SELECT item_id FROM fts_items WHERE fts_items MATCH {ph} LIMIT 2000", (fts_q,)
+                "SELECT item_id FROM fts_items WHERE fts_items MATCH ? LIMIT 2000", (fts_q,)
             ).fetchall()]
             sup_ids = [r[0] for r in conn.execute(
-                f"SELECT supplier_id FROM fts_suppliers WHERE fts_suppliers MATCH {ph} LIMIT 2000", (fts_q,)
+                "SELECT supplier_id FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT 2000", (fts_q,)
             ).fetchall()]
             org_ids = [r[0] for r in conn.execute(
-                f"SELECT org_id FROM fts_organismos WHERE fts_organismos MATCH {ph} LIMIT 2000", (fts_q,)
+                "SELECT org_id FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT 2000", (fts_q,)
             ).fetchall()]
         except Exception as e:
             conn.close()
@@ -539,16 +534,16 @@ def history_table(
         conds = []
         params = []
         if item_ids:
-            in_ph = ",".join([ph] * len(item_ids))
-            conds.append(f"a.item_id IN ({in_ph})")
+            ph = ",".join("?" * len(item_ids))
+            conds.append(f"a.item_id IN ({ph})")
             params.extend(item_ids)
         if sup_ids:
-            in_ph = ",".join([ph] * len(sup_ids))
-            conds.append(f"a.supplier_id IN ({in_ph})")
+            ph = ",".join("?" * len(sup_ids))
+            conds.append(f"a.supplier_id IN ({ph})")
             params.extend(sup_ids)
         if org_ids:
-            in_ph = ",".join([ph] * len(org_ids))
-            conds.append(f"a.org_id IN ({in_ph})")
+            ph = ",".join("?" * len(org_ids))
+            conds.append(f"a.org_id IN ({ph})")
             params.extend(org_ids)
 
         where = " OR ".join(conds)
@@ -570,9 +565,9 @@ def history_table(
         params = []
 
     if org_id:
-        base += f" AND a.org_id={ph}"; params.append(org_id)
+        base += " AND a.org_id=?"; params.append(org_id)
     if supplier_id:
-        base += f" AND a.supplier_id={ph}"; params.append(supplier_id)
+        base += " AND a.supplier_id=?"; params.append(supplier_id)
 
     base, params = _apply_smart_history_filter(base, params, smart_mode, smart_keywords)
     base, params = _append_date_filter(base, params, "a.date", date_filter)
@@ -587,7 +582,6 @@ def history_table(
     base, params = _append_numeric_filter(base, params, "(COALESCE(a.amount, 0) * COALESCE(NULLIF(a.quantity, 0), 1))", total)
     base, params = _append_text_filter(base, params, "a.currency", currency)
 
-    page_clause, page_params = sql_limit_offset(limit=limit, offset=offset)
     total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
     rows = conn.execute(
         f"""SELECT
@@ -602,8 +596,8 @@ def history_table(
             o.name AS org_name
         {base}
         ORDER BY {sort_expr} {sort_direction}, a.id DESC
-        {page_clause}""",
-        params + page_params
+        LIMIT ? OFFSET ?""",
+        params + [limit, offset]
     ).fetchall()
     conn.close()
     total_pages = ceil(total / limit) if total else 0

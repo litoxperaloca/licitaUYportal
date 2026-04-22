@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Iterable
 
 DB_PATH = Path(__file__).parent / "data" / "ocds.db"
 DB_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
@@ -322,71 +322,3 @@ def sqlite_compatible_insert(table: str, cols: Iterable[str]) -> str:
     if get_backend_mode() == "postgres":
         return f"INSERT INTO {table} ({cols_list}) VALUES ({','.join(['%s'] * len(list(cols)))}) ON CONFLICT DO NOTHING"
     return f"INSERT OR IGNORE INTO {table} ({cols_list}) VALUES ({','.join(['?'] * len(list(cols)))})"
-
-
-def sql_param() -> str:
-    return "%s" if get_backend_mode() == "postgres" else "?"
-
-
-def sql_limit_offset(limit: int | None = None, offset: int | None = None) -> tuple[str, list[int]]:
-    parts: list[str] = []
-    params: list[int] = []
-    ph = sql_param()
-    if limit is not None:
-        parts.append(f"LIMIT {ph}")
-        params.append(limit)
-    if offset is not None:
-        parts.append(f"OFFSET {ph}")
-        params.append(offset)
-    return (" " + " ".join(parts)) if parts else "", params
-
-
-def insert_ignore_or_upsert(
-    table: str,
-    cols: Sequence[str],
-    conflict_cols: Sequence[str] | None = None,
-    update_cols: Sequence[str] | None = None,
-) -> str:
-    placeholders = ",".join([sql_param()] * len(cols))
-    col_str = ",".join(cols)
-    if not conflict_cols or not update_cols:
-        if get_backend_mode() == "postgres":
-            return f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
-        return f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({placeholders})"
-
-    conflict_str = ",".join(conflict_cols)
-    updates = ",".join(f"{c}=excluded.{c}" for c in update_cols)
-    return (
-        f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) "
-        f"ON CONFLICT ({conflict_str}) DO UPDATE SET {updates}"
-    )
-
-
-def insert_returning_id(cur, table: str, data: Mapping[str, Any], id_column: str = "id") -> Any:
-    cols = list(data.keys())
-    values = [data[c] for c in cols]
-    placeholders = ",".join([sql_param()] * len(cols))
-    col_str = ",".join(cols)
-
-    if get_backend_mode() == "postgres":
-        cur.execute(
-            f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) RETURNING {id_column}",
-            values,
-        )
-        row = cur.fetchone()
-        if isinstance(row, dict):
-            return row[id_column]
-        return row[0]
-
-    cur.execute(f"INSERT INTO {table} ({col_str}) VALUES ({placeholders})", values)
-    return cur.lastrowid
-
-
-def run_script_multi_stmt(cur, script: str) -> None:
-    if get_backend_mode() == "sqlite":
-        cur.executescript(script)
-        return
-
-    for statement in (chunk.strip() for chunk in script.split(";")):
-        if statement:
-            cur.execute(statement)
