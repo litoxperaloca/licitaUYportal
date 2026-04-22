@@ -22,14 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 
-from database import (
-    get_backend_mode,
-    get_conn,
-    insert_ignore_or_upsert,
-    insert_returning_id,
-    run_script_multi_stmt,
-    sql_param,
-)
+from database import get_conn
 
 router = APIRouter(prefix="/api/process", tags=["process"])
 
@@ -49,8 +42,12 @@ def _year_from_filename(name: str) -> Optional[int]:
 def _upsert_batch(cur, table, cols, rows):
     if not rows:
         return
-    sql = insert_ignore_or_upsert(table, cols)
-    cur.executemany(sql, rows)
+    ph = ",".join("?" * len(cols))
+    col_str = ",".join(cols)
+    cur.executemany(
+        f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({ph})",
+        rows,
+    )
 
 
 def _item_key(cat_id, scheme, description):
@@ -65,23 +62,22 @@ def _item_key(cat_id, scheme, description):
 def _ingest_zip(job_id: int, zip_path: Path, year: int):
     conn = get_conn()
     cur = conn.cursor()
-    ph = sql_param()
 
     def _upd(status, progress=None, msg=""):
         now = datetime.utcnow().isoformat()
         if status == "running" and progress is None:
             cur.execute(
-                f"UPDATE process_jobs SET status={ph}, message={ph}, started_at={ph} WHERE id={ph}",
+                "UPDATE process_jobs SET status=?, message=?, started_at=? WHERE id=?",
                 (status, msg, now, job_id),
             )
         elif status in ("done", "error"):
             cur.execute(
-                f"UPDATE process_jobs SET status={ph}, progress={ph}, message={ph}, finished_at={ph} WHERE id={ph}",
+                "UPDATE process_jobs SET status=?, progress=?, message=?, finished_at=? WHERE id=?",
                 (status, progress or 0, msg, now, job_id),
             )
         else:
             cur.execute(
-                f"UPDATE process_jobs SET status={ph}, progress={ph}, message={ph} WHERE id={ph}",
+                "UPDATE process_jobs SET status=?, progress=?, message=? WHERE id=?",
                 (status, progress, msg, job_id),
             )
         conn.commit()
@@ -92,7 +88,7 @@ def _ingest_zip(job_id: int, zip_path: Path, year: int):
         with zipfile.ZipFile(zip_path) as zf:
             json_files = [n for n in zf.namelist() if n.endswith(".json")]
             cur.execute(
-                f"UPDATE process_jobs SET total={ph} WHERE id={ph}",
+                "UPDATE process_jobs SET total=? WHERE id=?",
                 (len(json_files), job_id),
             )
             conn.commit()
@@ -210,9 +206,9 @@ def _ingest_zip(job_id: int, zip_path: Path, year: int):
                     li_buf.clear()
                 if len(adj_buf) >= BATCH:
                     cur.executemany(
-                        f"""INSERT {'OR IGNORE' if get_backend_mode() == 'sqlite' else ''} INTO adjudicaciones
+                        """INSERT OR IGNORE INTO adjudicaciones
                            (item_id,supplier_id,org_id,ocid,amount,currency,quantity,unit,date,year)
-                           VALUES ({','.join([ph] * 10)}){" ON CONFLICT DO NOTHING" if get_backend_mode() == "postgres" else ""}""",
+                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
                         adj_buf,
                     )
                     adj_buf.clear()
@@ -231,25 +227,24 @@ def _ingest_zip(job_id: int, zip_path: Path, year: int):
             _upsert_batch(cur, "llamado_items", ["llamado_ocid","item_id"], li_buf)
             if adj_buf:
                 cur.executemany(
-                    f"""INSERT {'OR IGNORE' if get_backend_mode() == 'sqlite' else ''} INTO adjudicaciones
+                    """INSERT OR IGNORE INTO adjudicaciones
                        (item_id,supplier_id,org_id,ocid,amount,currency,quantity,unit,date,year)
-                       VALUES ({','.join([ph] * 10)}){" ON CONFLICT DO NOTHING" if get_backend_mode() == "postgres" else ""}""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     adj_buf,
                 )
 
             # rebuild FTS indexes
             _upd("running", len(json_files), "Reconstruyendo índices FTS...")
-            if get_backend_mode() == "sqlite":
-                run_script_multi_stmt(cur, """
-                    INSERT OR REPLACE INTO fts_items(item_id,description,cat_id)
-                        SELECT id,description,cat_id FROM items;
-                    INSERT OR REPLACE INTO fts_llamados(ocid,title,description)
-                        SELECT ocid,title,description FROM llamados;
-                    INSERT OR REPLACE INTO fts_suppliers(supplier_id,name)
-                        SELECT id,name FROM suppliers;
-                    INSERT OR REPLACE INTO fts_organismos(org_id,name)
-                        SELECT id,name FROM organismos;
-                """)
+            cur.executescript("""
+                INSERT OR REPLACE INTO fts_items(item_id,description,cat_id)
+                    SELECT id,description,cat_id FROM items;
+                INSERT OR REPLACE INTO fts_llamados(ocid,title,description)
+                    SELECT ocid,title,description FROM llamados;
+                INSERT OR REPLACE INTO fts_suppliers(supplier_id,name)
+                    SELECT id,name FROM suppliers;
+                INSERT OR REPLACE INTO fts_organismos(org_id,name)
+                    SELECT id,name FROM organismos;
+            """)
             conn.commit()
 
         _upd("done", len(json_files), f"Completado: {year}")
@@ -275,11 +270,11 @@ async def upload_zip(background_tasks: BackgroundTasks, file: UploadFile = File(
 
     conn = get_conn()
     cur = conn.cursor()
-    job_id = insert_returning_id(cur, "process_jobs", {
-        "filename": file.filename,
-        "year": year,
-        "status": "pending",
-    })
+    cur.execute(
+        "INSERT INTO process_jobs (filename, year, status) VALUES (?,?,?)",
+        (file.filename, year, "pending"),
+    )
+    job_id = cur.lastrowid
     conn.commit()
     conn.close()
 
@@ -300,7 +295,7 @@ def list_jobs():
 @router.get("/jobs/{job_id}")
 def get_job(job_id: int):
     conn = get_conn()
-    row = conn.execute(f"SELECT * FROM process_jobs WHERE id={sql_param()}", (job_id,)).fetchone()
+    row = conn.execute("SELECT * FROM process_jobs WHERE id=?", (job_id,)).fetchone()
     conn.close()
     if not row:
         raise HTTPException(404, "Job no encontrado")
@@ -310,7 +305,7 @@ def get_job(job_id: int):
 @router.delete("/jobs/{job_id}")
 def delete_job(job_id: int):
     conn = get_conn()
-    conn.execute(f"DELETE FROM process_jobs WHERE id={sql_param()}", (job_id,))
+    conn.execute("DELETE FROM process_jobs WHERE id=?", (job_id,))
     conn.commit()
     conn.close()
     return {"ok": True}
