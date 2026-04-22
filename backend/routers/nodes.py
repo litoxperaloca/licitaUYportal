@@ -11,7 +11,7 @@ from math import ceil
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 
-from database import get_conn
+from database import get_conn, get_backend_mode
 from routers.ai import client as ai_client, DEPLOYMENT_NAME
 
 router = APIRouter(tags=["nodes"])
@@ -33,6 +33,218 @@ HISTORY_SORT_FIELDS = {
     "total": "(COALESCE(a.amount, 0) * COALESCE(NULLIF(a.quantity, 0), 1))",
     "currency": "LOWER(COALESCE(a.currency, ''))",
 }
+
+
+class _SearchAdapter:
+    def search(self, conn, q: str, limit: int):  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def llamados_ocids(self, conn, q: str, limit: int):  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def history_ids(self, conn, q: str, limit: int):  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class _SQLiteSearchAdapter(_SearchAdapter):
+    def search(self, conn, q: str, limit: int):
+        fts_q = _sanitize_fts_query(q)
+        items = conn.execute(
+            """
+            SELECT item_id AS id, description AS label, 'item' AS type
+            FROM fts_items WHERE fts_items MATCH ? LIMIT ?
+            """,
+            (fts_q, limit),
+        ).fetchall()
+        suppliers = conn.execute(
+            """
+            SELECT supplier_id AS id, name AS label, 'supplier' AS type
+            FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT ?
+            """,
+            (fts_q, limit),
+        ).fetchall()
+        organismos = conn.execute(
+            """
+            SELECT org_id AS id, name AS label, 'organismo' AS type
+            FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT ?
+            """,
+            (fts_q, limit),
+        ).fetchall()
+        llamados = conn.execute(
+            """
+            SELECT ocid AS id, title AS label, 'llamado' AS type
+            FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT ?
+            """,
+            (fts_q, limit),
+        ).fetchall()
+        return [dict(r) for rows in [items, suppliers, organismos, llamados] for r in rows]
+
+    def llamados_ocids(self, conn, q: str, limit: int):
+        fts_q = _sanitize_fts_query(q)
+        rows = conn.execute(
+            "SELECT ocid FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT ?",
+            (fts_q, limit),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def history_ids(self, conn, q: str, limit: int):
+        fts_q = _sanitize_fts_query(q)
+        item_ids = [r[0] for r in conn.execute(
+            "SELECT item_id FROM fts_items WHERE fts_items MATCH ? LIMIT ?",
+            (fts_q, limit),
+        ).fetchall()]
+        sup_ids = [r[0] for r in conn.execute(
+            "SELECT supplier_id FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT ?",
+            (fts_q, limit),
+        ).fetchall()]
+        org_ids = [r[0] for r in conn.execute(
+            "SELECT org_id FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT ?",
+            (fts_q, limit),
+        ).fetchall()]
+        return {"item_ids": item_ids, "supplier_ids": sup_ids, "org_ids": org_ids}
+
+
+class _PostgresSearchAdapter(_SearchAdapter):
+    @staticmethod
+    def _rank_expr(col: str) -> str:
+        return (
+            "CASE "
+            f"WHEN unaccent(lower(COALESCE({col}, ''))) = unaccent(lower(%s)) THEN 300 "
+            f"WHEN unaccent(lower(COALESCE({col}, ''))) LIKE unaccent(lower(%s)) || '%%' THEN 200 "
+            f"WHEN unaccent(lower(COALESCE({col}, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%' THEN 100 "
+            "ELSE 0 END"
+        )
+
+    def search(self, conn, q: str, limit: int):
+        rank_item = self._rank_expr("i.description")
+        rank_supplier = self._rank_expr("s.name")
+        rank_org = self._rank_expr("o.name")
+        rank_llamado = self._rank_expr("l.title")
+        like_q = q.strip()
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+                SELECT i.id, i.description AS label, 'item' AS type, {rank_item} AS rank
+                FROM items i
+                WHERE unaccent(lower(COALESCE(i.description, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+                UNION ALL
+                SELECT s.id, s.name AS label, 'supplier' AS type, {rank_supplier} AS rank
+                FROM suppliers s
+                WHERE unaccent(lower(COALESCE(s.name, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+                UNION ALL
+                SELECT o.id, o.name AS label, 'organismo' AS type, {rank_org} AS rank
+                FROM organismos o
+                WHERE unaccent(lower(COALESCE(o.name, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+                UNION ALL
+                SELECT l.ocid, l.title AS label, 'llamado' AS type, {rank_llamado} AS rank
+                FROM llamados l
+                WHERE unaccent(lower(COALESCE(l.title, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+            )
+            SELECT id, label, type
+            FROM ranked
+            WHERE rank > 0
+            ORDER BY rank DESC, label ASC
+            LIMIT %s
+            """,
+            (
+                like_q, like_q, like_q, like_q,
+                like_q, like_q, like_q, like_q,
+                like_q, like_q, like_q, like_q,
+                like_q, like_q, like_q, like_q,
+                limit,
+            ),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def llamados_ocids(self, conn, q: str, limit: int):
+        rank = self._rank_expr("l.title")
+        rows = conn.execute(
+            f"""
+            SELECT l.ocid
+            FROM llamados l
+            WHERE unaccent(lower(COALESCE(l.title, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+               OR unaccent(lower(COALESCE(l.description, ''))) LIKE '%%' || unaccent(lower(%s)) || '%%'
+            ORDER BY {rank} DESC, l.date DESC NULLS LAST
+            LIMIT %s
+            """,
+            (q.strip(), q.strip(), q.strip(), q.strip(), q.strip(), limit),
+        ).fetchall()
+        return [r["ocid"] for r in rows]
+
+    def history_ids(self, conn, q: str, limit: int):
+        qv = q.strip()
+        item_rows = conn.execute(
+            """
+            SELECT i.id
+            FROM items i
+            WHERE unaccent(lower(COALESCE(i.description, ''))) LIKE '%' || unaccent(lower(%s)) || '%'
+               OR unaccent(lower(COALESCE(i.cat_id, ''))) LIKE '%' || unaccent(lower(%s)) || '%'
+            ORDER BY
+                CASE
+                    WHEN unaccent(lower(COALESCE(i.description, ''))) = unaccent(lower(%s)) THEN 300
+                    WHEN unaccent(lower(COALESCE(i.description, ''))) LIKE unaccent(lower(%s)) || '%' THEN 200
+                    WHEN unaccent(lower(COALESCE(i.description, ''))) LIKE '%' || unaccent(lower(%s)) || '%' THEN 100
+                    ELSE 0
+                END DESC
+            LIMIT %s
+            """,
+            (qv, qv, qv, qv, qv, limit),
+        ).fetchall()
+        sup_rows = conn.execute(
+            """
+            SELECT s.id
+            FROM suppliers s
+            WHERE unaccent(lower(COALESCE(s.name, ''))) LIKE '%' || unaccent(lower(%s)) || '%'
+            ORDER BY
+                CASE
+                    WHEN unaccent(lower(COALESCE(s.name, ''))) = unaccent(lower(%s)) THEN 300
+                    WHEN unaccent(lower(COALESCE(s.name, ''))) LIKE unaccent(lower(%s)) || '%' THEN 200
+                    WHEN unaccent(lower(COALESCE(s.name, ''))) LIKE '%' || unaccent(lower(%s)) || '%' THEN 100
+                    ELSE 0
+                END DESC
+            LIMIT %s
+            """,
+            (qv, qv, qv, qv, limit),
+        ).fetchall()
+        org_rows = conn.execute(
+            """
+            SELECT o.id
+            FROM organismos o
+            WHERE unaccent(lower(COALESCE(o.name, ''))) LIKE '%' || unaccent(lower(%s)) || '%'
+            ORDER BY
+                CASE
+                    WHEN unaccent(lower(COALESCE(o.name, ''))) = unaccent(lower(%s)) THEN 300
+                    WHEN unaccent(lower(COALESCE(o.name, ''))) LIKE unaccent(lower(%s)) || '%' THEN 200
+                    WHEN unaccent(lower(COALESCE(o.name, ''))) LIKE '%' || unaccent(lower(%s)) || '%' THEN 100
+                    ELSE 0
+                END DESC
+            LIMIT %s
+            """,
+            (qv, qv, qv, qv, limit),
+        ).fetchall()
+        return {
+            "item_ids": [r["id"] for r in item_rows],
+            "supplier_ids": [r["id"] for r in sup_rows],
+            "org_ids": [r["id"] for r in org_rows],
+        }
+
+
+def _get_search_adapter() -> _SearchAdapter:
+    return _PostgresSearchAdapter() if get_backend_mode() == "postgres" else _SQLiteSearchAdapter()
+
+
+def _row_scalar(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return next(iter(row.values()), None)
+    try:
+        return row[0]
+    except Exception:
+        if hasattr(row, "keys"):
+            key = next(iter(row.keys()), None)
+            return row[key] if key is not None else None
+        return None
 
 
 class HistorySmartSearchRequest(BaseModel):
@@ -82,41 +294,41 @@ def _normalize_smart_keywords(raw: str | None):
     return keywords[:12]
 
 
-def _append_text_filter(base: str, params: list, expr: str, value: str | None):
+def _append_text_filter(base: str, params: list, expr: str, value: str | None, ph: str = "?"):
     if not value or not value.strip():
         return base, params
-    base += f" AND LOWER(COALESCE({expr}, '')) LIKE ?"
+    base += f" AND LOWER(COALESCE({expr}, '')) LIKE {ph}"
     params.append(f"%{value.strip().lower()}%")
     return base, params
 
 
-def _append_numeric_filter(base: str, params: list, expr: str, value: str | None):
+def _append_numeric_filter(base: str, params: list, expr: str, value: str | None, ph: str = "?"):
     if not value or not value.strip():
         return base, params
     match = NUMERIC_FILTER_RE.match(value)
     if match:
         op = match.group(1) or "="
         number = float(match.group(2).replace(",", "."))
-        base += f" AND {expr} {op} ?"
+        base += f" AND {expr} {op} {ph}"
         params.append(number)
     return base, params
 
 
-def _append_date_filter(base: str, params: list, expr: str, value: str | None):
+def _append_date_filter(base: str, params: list, expr: str, value: str | None, ph: str = "?"):
     if not value or not value.strip():
         return base, params
     match = DATE_FILTER_RE.match(value)
     if match:
         op = match.group(1) or "="
-        base += f" AND substr(COALESCE({expr}, ''), 1, 10) {op} ?"
+        base += f" AND substr(COALESCE({expr}, ''), 1, 10) {op} {ph}"
         params.append(match.group(2))
     else:
-        base += f" AND substr(COALESCE({expr}, ''), 1, 10) LIKE ?"
+        base += f" AND substr(COALESCE({expr}, ''), 1, 10) LIKE {ph}"
         params.append(f"%{value.strip()}%")
     return base, params
 
 
-def _build_keyword_clause(alias: str, keywords: list[str]):
+def _build_keyword_clause(alias: str, keywords: list[str], ph: str = "?"):
     if not keywords:
         return "", []
 
@@ -124,20 +336,26 @@ def _build_keyword_clause(alias: str, keywords: list[str]):
     params = []
     for keyword in keywords:
         clauses.append(
-            f"(LOWER(COALESCE({alias}.description, '')) LIKE ? "
-            f"OR LOWER(COALESCE({alias}.cat_id, '')) LIKE ? "
-            f"OR LOWER(COALESCE({alias}.id, '')) LIKE ?)"
+            f"(LOWER(COALESCE({alias}.description, '')) LIKE {ph} "
+            f"OR LOWER(COALESCE({alias}.cat_id, '')) LIKE {ph} "
+            f"OR LOWER(COALESCE({alias}.id, '')) LIKE {ph})"
         )
         token = f"%{keyword}%"
         params.extend([token, token, token])
     return " OR ".join(clauses), params
 
 
-def _apply_smart_history_filter(base: str, params: list, smart_mode: str | None, smart_keywords: list[str]):
+def _apply_smart_history_filter(
+    base: str,
+    params: list,
+    smart_mode: str | None,
+    smart_keywords: list[str],
+    ph: str = "?",
+):
     if not smart_mode or not smart_keywords:
         return base, params
 
-    keyword_clause, keyword_params = _build_keyword_clause("i2", smart_keywords)
+    keyword_clause, keyword_params = _build_keyword_clause("i2", smart_keywords, ph)
     if not keyword_clause:
         return base, params
 
@@ -337,38 +555,15 @@ def search(q: str = Query(..., min_length=2), limit: int = Query(20, le=50)):
     if not q.strip():
         return {"results": []}
     conn = get_conn()
-    fts_q = _sanitize_fts_query(q)
+    adapter = _get_search_adapter()
 
     try:
-        items = conn.execute(f"""
-            SELECT item_id AS id, description AS label, 'item' AS type
-            FROM fts_items WHERE fts_items MATCH ? LIMIT {limit}
-        """, (fts_q,)).fetchall()
-
-        suppliers = conn.execute(f"""
-            SELECT supplier_id AS id, name AS label, 'supplier' AS type
-            FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT {limit}
-        """, (fts_q,)).fetchall()
-
-        organismos = conn.execute(f"""
-            SELECT org_id AS id, name AS label, 'organismo' AS type
-            FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT ?
-        """, (fts_q, limit)).fetchall()
-
-        llamados = conn.execute(f"""
-            SELECT ocid AS id, title AS label, 'llamado' AS type
-            FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT ?
-        """, (fts_q, limit)).fetchall()
+        results = adapter.search(conn, q, limit)
     except Exception as e:
-        # Probable error de corrupción o sintaxis en FTS
         conn.close()
         raise HTTPException(status_code=400, detail=f"Error en la búsqueda: {str(e)}")
 
     conn.close()
-    results = []
-    for rows in [items, suppliers, organismos, llamados]:
-        for r in rows:
-            results.append(dict(r))
     return {"results": results[:limit * 2]}
 
 
@@ -392,40 +587,39 @@ def list_llamados(
     year_int = int(year) if year and year.strip().isdigit() else None
     year = year_int
     conn = get_conn()
+    backend = get_backend_mode()
+    ph = "%s" if backend == "postgres" else "?"
+    adapter = _get_search_adapter()
 
     if q and len(q.strip()) >= 2:
-        fts_q = _sanitize_fts_query(q)
         try:
-            ocids = conn.execute(f"""
-                SELECT ocid FROM fts_llamados WHERE fts_llamados MATCH ? LIMIT 2000
-            """, (fts_q,)).fetchall()
+            ocid_list = adapter.llamados_ocids(conn, q, 2000)
         except Exception as e:
             conn.close()
             raise HTTPException(status_code=400, detail=f"Error de búsqueda: {str(e)}")
 
-        ocid_list = tuple(r[0] for r in ocids)
         if not ocid_list:
             conn.close()
             return {"items": [], "total": 0}
-        ph = ",".join("?" * len(ocid_list))
-        base = f"FROM llamados l JOIN organismos o ON o.id=l.buyer_id WHERE l.ocid IN ({ph})"
+        ph_in = ",".join([ph] * len(ocid_list))
+        base = f"FROM llamados l JOIN organismos o ON o.id=l.buyer_id WHERE l.ocid IN ({ph_in})"
         params = list(ocid_list)
     else:
         base = "FROM llamados l LEFT JOIN organismos o ON o.id=l.buyer_id WHERE 1=1"
         params = []
         if org_id:
-            base += " AND l.buyer_id=?"; params.append(org_id)
+            base += f" AND l.buyer_id={ph}"; params.append(org_id)
         if year:
-            base += " AND l.year=?"; params.append(year)
+            base += f" AND l.year={ph}"; params.append(year)
         if method:
-            base += " AND l.method=?"; params.append(method)
+            base += f" AND l.method={ph}"; params.append(method)
         if status:
-            base += " AND l.status=?"; params.append(status)
+            base += f" AND l.status={ph}"; params.append(status)
 
-    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
+    total = _row_scalar(conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()) or 0
     rows = conn.execute(
         f"SELECT l.ocid, l.title, l.method, l.date, l.year, l.status, o.name AS org_name {base}"
-        f" ORDER BY l.date DESC LIMIT ? OFFSET ?",
+        f" ORDER BY l.date DESC LIMIT {ph} OFFSET {ph}",
         params + [limit, offset],
     ).fetchall()
     conn.close()
@@ -502,6 +696,9 @@ def history_table(
     smart_keywords_json: str = Query(None),
 ):
     conn = get_conn()
+    backend = get_backend_mode()
+    ph = "%s" if backend == "postgres" else "?"
+    adapter = _get_search_adapter()
     org_id  = org_id  or None
     supplier_id = supplier_id or None
     smart_keywords = _normalize_smart_keywords(smart_keywords_json)
@@ -511,17 +708,11 @@ def history_table(
 
     # Text search path
     if q and len(q.strip()) >= 2:
-        fts_q = _sanitize_fts_query(q)
         try:
-            item_ids = [r[0] for r in conn.execute(
-                "SELECT item_id FROM fts_items WHERE fts_items MATCH ? LIMIT 2000", (fts_q,)
-            ).fetchall()]
-            sup_ids = [r[0] for r in conn.execute(
-                "SELECT supplier_id FROM fts_suppliers WHERE fts_suppliers MATCH ? LIMIT 2000", (fts_q,)
-            ).fetchall()]
-            org_ids = [r[0] for r in conn.execute(
-                "SELECT org_id FROM fts_organismos WHERE fts_organismos MATCH ? LIMIT 2000", (fts_q,)
-            ).fetchall()]
+            matches = adapter.history_ids(conn, q, 2000)
+            item_ids = matches["item_ids"]
+            sup_ids = matches["supplier_ids"]
+            org_ids = matches["org_ids"]
         except Exception as e:
             conn.close()
             raise HTTPException(400, f"Error de búsqueda: {e}")
@@ -534,16 +725,16 @@ def history_table(
         conds = []
         params = []
         if item_ids:
-            ph = ",".join("?" * len(item_ids))
-            conds.append(f"a.item_id IN ({ph})")
+            ph_in = ",".join([ph] * len(item_ids))
+            conds.append(f"a.item_id IN ({ph_in})")
             params.extend(item_ids)
         if sup_ids:
-            ph = ",".join("?" * len(sup_ids))
-            conds.append(f"a.supplier_id IN ({ph})")
+            ph_in = ",".join([ph] * len(sup_ids))
+            conds.append(f"a.supplier_id IN ({ph_in})")
             params.extend(sup_ids)
         if org_ids:
-            ph = ",".join("?" * len(org_ids))
-            conds.append(f"a.org_id IN ({ph})")
+            ph_in = ",".join([ph] * len(org_ids))
+            conds.append(f"a.org_id IN ({ph_in})")
             params.extend(org_ids)
 
         where = " OR ".join(conds)
@@ -565,24 +756,24 @@ def history_table(
         params = []
 
     if org_id:
-        base += " AND a.org_id=?"; params.append(org_id)
+        base += f" AND a.org_id={ph}"; params.append(org_id)
     if supplier_id:
-        base += " AND a.supplier_id=?"; params.append(supplier_id)
+        base += f" AND a.supplier_id={ph}"; params.append(supplier_id)
 
-    base, params = _apply_smart_history_filter(base, params, smart_mode, smart_keywords)
-    base, params = _append_date_filter(base, params, "a.date", date_filter)
-    base, params = _append_text_filter(base, params, "o.name", org_name)
-    base, params = _append_text_filter(base, params, "s.name", supplier_name)
-    base, params = _append_text_filter(base, params, "COALESCE(NULLIF(i.cat_id, ''), i.id)", item_code)
-    base, params = _append_text_filter(base, params, "COALESCE(NULLIF(a.unit, ''), i.unit)", unit)
-    base, params = _append_text_filter(base, params, "i.description", item_description)
-    base, params = _append_numeric_filter(base, params, "COALESCE(a.year, 0)", year)
-    base, params = _append_numeric_filter(base, params, "COALESCE(a.quantity, 1)", quantity)
-    base, params = _append_numeric_filter(base, params, "COALESCE(a.amount, 0)", amount)
-    base, params = _append_numeric_filter(base, params, "(COALESCE(a.amount, 0) * COALESCE(NULLIF(a.quantity, 0), 1))", total)
-    base, params = _append_text_filter(base, params, "a.currency", currency)
+    base, params = _apply_smart_history_filter(base, params, smart_mode, smart_keywords, ph)
+    base, params = _append_date_filter(base, params, "a.date", date_filter, ph)
+    base, params = _append_text_filter(base, params, "o.name", org_name, ph)
+    base, params = _append_text_filter(base, params, "s.name", supplier_name, ph)
+    base, params = _append_text_filter(base, params, "COALESCE(NULLIF(i.cat_id, ''), i.id)", item_code, ph)
+    base, params = _append_text_filter(base, params, "COALESCE(NULLIF(a.unit, ''), i.unit)", unit, ph)
+    base, params = _append_text_filter(base, params, "i.description", item_description, ph)
+    base, params = _append_numeric_filter(base, params, "COALESCE(a.year, 0)", year, ph)
+    base, params = _append_numeric_filter(base, params, "COALESCE(a.quantity, 1)", quantity, ph)
+    base, params = _append_numeric_filter(base, params, "COALESCE(a.amount, 0)", amount, ph)
+    base, params = _append_numeric_filter(base, params, "(COALESCE(a.amount, 0) * COALESCE(NULLIF(a.quantity, 0), 1))", total, ph)
+    base, params = _append_text_filter(base, params, "a.currency", currency, ph)
 
-    total = conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0]
+    total = _row_scalar(conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()) or 0
     rows = conn.execute(
         f"""SELECT
             a.date, a.year, a.amount, a.currency, a.quantity,
@@ -596,7 +787,7 @@ def history_table(
             o.name AS org_name
         {base}
         ORDER BY {sort_expr} {sort_direction}, a.id DESC
-        LIMIT ? OFFSET ?""",
+        LIMIT {ph} OFFSET {ph}""",
         params + [limit, offset]
     ).fetchall()
     conn.close()
