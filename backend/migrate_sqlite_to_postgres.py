@@ -83,10 +83,12 @@ def main():
             "CREATE INDEX IF NOT EXISTS idx_adj_date ON adjudicaciones(date)",
             "CREATE INDEX IF NOT EXISTS idx_adj_item_year ON adjudicaciones(item_id, year)",
             "CREATE INDEX IF NOT EXISTS idx_adj_supplier_year ON adjudicaciones(supplier_id, year)",
-            "CREATE INDEX IF NOT EXISTS idx_organismos_name_trgm ON organismos USING GIN (name gin_trgm_ops)",
-            "CREATE INDEX IF NOT EXISTS idx_suppliers_name_trgm ON suppliers USING GIN (name gin_trgm_ops)",
-            "CREATE INDEX IF NOT EXISTS idx_items_desc_trgm ON items USING GIN (description gin_trgm_ops)",
-            "CREATE INDEX IF NOT EXISTS idx_llamados_title_trgm ON llamados USING GIN (title gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_organismos_name_trgm ON organismos USING GIN (unaccent(lower(name)) gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_suppliers_name_trgm ON suppliers USING GIN (unaccent(lower(name)) gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_items_desc_trgm ON items USING GIN (unaccent(lower(description)) gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_items_cat_id_trgm ON items USING GIN (unaccent(lower(COALESCE(cat_id, ''))) gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_llamados_title_trgm ON llamados USING GIN (unaccent(lower(title)) gin_trgm_ops)",
+            "CREATE INDEX IF NOT EXISTS idx_llamados_desc_trgm ON llamados USING GIN (unaccent(lower(COALESCE(description, ''))) gin_trgm_ops)",
         ]:
             try:
                 cur.execute(stmt)
